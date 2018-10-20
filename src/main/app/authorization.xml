@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+
+    <flow name="GET-ACCESS-CODE" processingStrategy="synchronous">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/accessCode" doc:name="HTTP"/>
+        <http:static-resource-handler resourceBase="${app.home}/web" defaultFile="${env}.staticForm.html" doc:name="HTTP Static Resource Handler"/>
+    </flow>
+    <flow name="SERVICE-CALLBACK" processingStrategy="synchronous">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/callback" doc:name="HTTP"/>
+        <logger message="RETURNED INFO FROM INTUIT: #[message.inboundProperties.'http.query.params'.state] -- #[message.inboundProperties.'http.query.params'.code] -- #[message.inboundProperties.'http.query.params'.realmId]" level="INFO" doc:name="RETURNED INFO FROM INTUIT"/>
+        <set-variable variableName="accessCode" value="#[message.inboundProperties.'http.query.params'.code]" doc:name="accessCode"/>
+        <flow-ref name="GET-AUTHORIZATION-CODE" doc:name="GET-AUTHORIZATION-CODE"/>
+    </flow>
+    <flow name="SEARCH-FOR-EXISTING-CREDS" processingStrategy="synchronous">
+        <db:select config-ref="MySQL_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[Select * from QuickbooksAuth where applicationName='mulesoft-demo']]></db:parameterized-query>
+        </db:select>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload]]></dw:set-payload>
+        </dw:transform-message>
+        <set-variable variableName="databaseCredentials" value="#[payload]" doc:name="databaseCredentials"/>
+        <set-variable variableName="authorizationKeys" value="#[payload.size()]" doc:name="authorizationKeys"/>
+        <logger message="Found: #[payload.size()]" level="INFO" doc:name="Logger"/>
+    </flow>
+    <flow name="GET-AUTHORIZATION-CODE" processingStrategy="synchronous">
+        <dw:transform-message doc:name="prepare request body">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	grant_type:"authorization_code",
+	code:flowVars.accessCode,
+	redirect_uri: "http://localhost:8081/callback"
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <http:request config-ref="HTTP_Request_Configuration" path="/oauth2/v1/tokens/bearer" method="POST" doc:name="GetAccessTokenAndRefresh">
+            <http:request-builder>
+                <http:header headerName="Authorization" value="Basic #[new String(org.apache.commons.codec.binary.Base64.encodeBase64((&quot;${client_id}:${client_secret}&quot;).getBytes()))]"/>
+                <http:header headerName="Accept" value="application/json"/>
+                <http:header headerName="Content-Type" value="application/x-www-form-urlencoded"/>
+            </http:request-builder>
+            <http:success-status-code-validator values="200..599"/>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="#[payload]" level="INFO" doc:name="Logger"/>
+        <dw:transform-message doc:name="prepare refresh payload">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	grant_type:"refresh_token",
+	refresh_token:payload.refresh_token
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <http:request config-ref="HTTP_Request_Configuration" path="/oauth2/v1/tokens/bearer" method="POST" doc:name="refresh">
+            <http:request-builder>
+                <http:header headerName="Authorization" value="Basic #[new String(org.apache.commons.codec.binary.Base64.encodeBase64((&quot;${client_id}:${client_secret}&quot;).getBytes()))]"/>
+                <http:header headerName="Accept" value="application/json"/>
+                <http:header headerName="Content-Type" value="application/x-www-form-urlencoded"/>
+            </http:request-builder>
+            <http:success-status-code-validator values="200..599"/>
+        </http:request>
+        <object-to-string-transformer doc:name="Object to String"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="Refresh Token Response: #[payload]" level="INFO" doc:name="Logger"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload]]></dw:set-payload>
+        </dw:transform-message>
+        <logger message="#[payload]" level="INFO" doc:name="Logger"/>
+        <set-variable variableName="quickbooksAuthObject" value="#[payload]" doc:name="quickbooksAuthObject"/>
+        <flow-ref name="SEARCH-FOR-EXISTING-CREDS" doc:name="SEARCH-FOR-EXISTING-CREDS"/>
+        <choice doc:name="There's a key already stored">
+            <when expression="#[flowVars.authorizationKeys &gt; 0]">
+                <logger message="Record updated" level="INFO" doc:name="Logger"/>
+                <db:update config-ref="MySQL_Configuration" doc:name="Database">
+                    <db:parameterized-query><![CDATA[UPDATE QuickbooksAuth 
+SET accessToken=#[flowVars.quickbooksAuthObject.access_token],refreshToken=#[flowVars.quickbooksAuthObject.refresh_token]
+Where applicationName='mulesoft-demo']]></db:parameterized-query>
+                </db:update>
+                <logger message="Record updated" level="INFO" doc:name="Logger"/>
+            </when>
+            <otherwise>
+                <logger message="Record Inserted" level="INFO" doc:name="Logger"/>
+                <db:insert config-ref="MySQL_Configuration" doc:name="Insert Auth record">
+                    <db:parameterized-query><![CDATA[INSERT INTO 
+QuickbooksAuth 
+(applicationName,accessToken,refreshToken)  
+VALUES 
+("mulesoft-demo",#[flowVars.quickbooksAuthObject.access_token],#[flowVars.quickbooksAuthObject.refresh_token]);]]></db:parameterized-query>
+                </db:insert>
+                <logger message="Record Inserted" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+        <set-payload value="#[&quot;Authorization Success&quot;]" doc:name="Set Payload"/>
+    </flow>
+    <flow name="refresh_poller" processingStrategy="synchronous">
+        <poll doc:name="Poll">
+            <fixed-frequency-scheduler frequency="40" startDelay="1" timeUnit="MINUTES"/>
+            <logger message="Refreshing token" level="INFO" doc:name="Logger"/>
+        </poll>
+        <set-variable variableName="qb" value="" doc:name="Variable"/>
+        <flow-ref name="SEARCH-FOR-EXISTING-CREDS" doc:name="SEARCH-FOR-EXISTING-CREDS"/>
+        <choice doc:name="There's a authorization code stored?">
+            <when expression="#[flowVars.authorizationKeys &gt; 0]">
+                <logger message="Using: #[flowVars.databaseCredentials[0].refreshToken]" level="INFO" doc:name="Logger"/>
+                <dw:transform-message doc:name="prepare refresh payload">
+                    <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+{
+	grant_type:"refresh_token",
+	refresh_token:flowVars.databaseCredentials[0].refreshToken
+}]]></dw:set-payload>
+                </dw:transform-message>
+                <http:request config-ref="HTTP_Request_Configuration" path="/oauth2/v1/tokens/bearer" method="POST" doc:name="refresh">
+                    <http:request-builder>
+                        <http:header headerName="Authorization" value="Basic #[new String(org.apache.commons.codec.binary.Base64.encodeBase64((&quot;${client_id}:${client_secret}&quot;).getBytes()))]"/>
+                        <http:header headerName="Accept" value="application/json"/>
+                        <http:header headerName="Content-Type" value="application/x-www-form-urlencoded"/>
+                    </http:request-builder>
+                    <http:success-status-code-validator values="200..599"/>
+                </http:request>
+                <object-to-string-transformer doc:name="Object to String"/>
+                <choice doc:name="Choice">
+                    <when expression="#[payload.contains(&quot;invalid_grant&quot;)]">
+                        <logger message="The access token is invalid" level="INFO" doc:name="Logger"/>
+                    </when>
+                    <otherwise>
+                        <json:object-to-json-transformer doc:name="Object to JSON"/>
+                        <logger message="Response from refresh token: #[&quot;\n&quot;] #[payload]" level="INFO" doc:name="Logger"/>
+                        <dw:transform-message doc:name="Transform Message">
+                            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload]]></dw:set-payload>
+                        </dw:transform-message>
+                        <db:update config-ref="MySQL_Configuration" doc:name="Update existing values">
+                            <db:parameterized-query><![CDATA[UPDATE QuickbooksAuth 
+SET accessToken=#[payload.access_token],refreshToken=#[payload.refresh_token]
+Where applicationName='mulesfot-demo']]></db:parameterized-query>
+                        </db:update>
+                        <logger message="Record updated" level="INFO" doc:name="Logger"/>
+                    </otherwise>
+                </choice>
+            </when>
+            <otherwise>
+                <logger message="No Keys stored yet." level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+        
+    </flow>
+</mule>

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:schedulers="http://www.mulesoft.org/schema/mule/schedulers"
+	xmlns:objectstore="http://www.mulesoft.org/schema/mule/objectstore"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/schedulers http://www.mulesoft.org/schema/mule/schedulers/current/mule-schedulers.xsd
+http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/mule/objectstore/current/mule-objectstore.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd">
+    <http:request-config name="SANDBOX" protocol="HTTPS" host="sandbox-quickbooks.api.intuit.com" port="443" basePath="/" doc:name="HTTP Request Configuration"/>
+    <flow name="GetAccessTokenVar">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/showmeAll" doc:name="HTTP"/>
+        <set-variable variableName="quickbooks_authorization" value="" doc:name="quickbooks_authorization"/>
+        <flow-ref name="SEARCH-FOR-EXISTING-CREDS" doc:name="SEARCH-FOR-EXISTING-CREDS"/>
+        <logger message="ACCESS TOKEN- #[flowVars.databaseCredentials[0].access_token]" level="INFO" doc:name="Logger"/>
+        <set-payload value="#[flowVars.databaseCredentials[0].accessToken]" doc:name="Set Payload"/>
+        <logger message="#[payload]" level="INFO" doc:name="Logger"/>
+    </flow>
+    
+    <flow name="GET-CUSTOMER" processingStrategy="synchronous">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/customer" doc:name="HTTP"/>
+        <flow-ref name="GetAccessTokenVar" doc:name="GetAccessTokenVar"/>
+        <http:request config-ref="SANDBOX" path="/v3/company/${realmId}/customer/1" method="GET" doc:name="HTTP - QB Get All Customers">
+            <http:request-builder>
+                <http:header headerName="Authorization" value="Bearer #[payload]"/>
+                <http:header headerName="Accept" value="application/json"/>
+            </http:request-builder>
+            <http:success-status-code-validator values="200..599"/>
+        </http:request>
+        <byte-array-to-string-transformer doc:name="Byte Array to String"/>
+        <logger message="CUSTOMERS: #[payload]" level="INFO" doc:name="Logger"/>
+      </flow>
+</mule>
